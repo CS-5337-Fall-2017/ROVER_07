@@ -28,7 +28,7 @@ import enums.Terrain;
 
 /**
  * 
- * @author rkjc
+ * @author kjc
  * 
  * ROVER_07 is intended to be a basic template to start building your rover on
  * Start by refactoring the class name to match your rovers name.
