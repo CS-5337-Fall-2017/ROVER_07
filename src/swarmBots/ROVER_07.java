@@ -4,21 +4,29 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
-import java.lang.reflect.Type;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
+import org.json.simple.JSONArray;
 
 import MapSupport.Coord;
 import MapSupport.MapTile;
+import MapSupport.PlanetMap;
 import MapSupport.ScanMap;
 import common.Rover;
 import communicationInterface.Communication;
+import communicationInterface.CommunicationHelper;
+import enums.RoverDriveType;
+import enums.Science;
 import enums.Terrain;
+import rover_logic.Astar;
+import searchStrategy.AstarSearch;
+import searchStrategy.SearchStrategy;
+import searchStrategy.graph.Edge;
+import searchStrategy.graph.Graph;
+import searchStrategy.graph.Node;
+import searchStrategy.graph.NodeData;
 
 /*
  * The seed that this program is built on is a chat program example found here:
@@ -45,6 +53,7 @@ import enums.Terrain;
 
 public class ROVER_07 extends Rover {
 
+	
 	/**
 	 * Runs the client
 	 */
@@ -74,7 +83,13 @@ public class ROVER_07 extends Rover {
 		rovername = "ROVER_07";
 		SERVER_ADDRESS = serverAddress;
 	}
-
+	
+	/**************************
+	 * Communications Functions
+	 ***************************/
+	// get data from server and update field map
+	
+	
 	/**
 	 * 
 	 * The Rover Main instantiates and runs the rover as a runnable thread
@@ -106,28 +121,6 @@ public class ROVER_07 extends Rover {
 					break;
 				}
 			}
-	
-	
-			
-			/**
-			 *  ### Setting up variables to be used in the Rover control loop ###
-			 *  add more as needed
-			 */
-			int stepCount = 0;	
-			String line = "";	
-			boolean goingSouth = false;
-			boolean stuck = false; // just means it did not change locations between requests,
-									// could be velocity limit or obstruction etc.
-			boolean blocked = false;
-	
-			// might or might not have a use for this
-			String[] cardinals = new String[4];
-			cardinals[0] = "N";
-			cardinals[1] = "E";
-			cardinals[2] = "S";
-			cardinals[3] = "W";	
-			String currentDir = cardinals[0];		
-			
 
 			/**
 			 *  ### Retrieve static values from RoverControlProcessor (RCP) ###
@@ -139,8 +132,16 @@ public class ROVER_07 extends Rover {
 			equipment = getEquipment();
 			System.out.println(rovername + " equipment list results " + equipment + "\n");
 			
+			// sets drivable terrain list used in searching
+			for(String equip: equipment) {
+				if (RoverDriveType.getEnum(equip) != RoverDriveType.NONE) {
+					setDrivableTerrain(RoverDriveType.getEnum(equip));
+					break;
+				}
+			}
 			
 			// **** Request START_LOC Location from SwarmServer **** this might be dropped as it should be (0, 0)
+			// 
 			startLocation = getStartLocation();
 			System.out.println(rovername + " START_LOC " + startLocation);
 			
@@ -155,8 +156,33 @@ public class ROVER_07 extends Rover {
 	        String url = "http://localhost:3000/api"; // <----------------------  this will have to be changed if multiple servers are needed
 	        String corp_secret = "gz5YhL70a2"; // not currently used - for future implementation
 	
+	       
+	        
+			
+			/**
+			 *  ### Setting up variables to be used in the Rover control loop ###
+			 *  add more as needed
+			 */
+	        
 	        Communication com = new Communication(url, rovername, corp_secret);
-	
+	        
+	    	SearchStrategy searchStrategy = new AstarSearch();
+	    	
+	    	List<Edge> path = new ArrayList<Edge>();
+	    	int pathIndex = 0;
+	        
+	        boolean stopped = true;
+	        boolean nextHasRover = false;
+	        String nextTerrain = "";
+
+	        Graph graph= null;
+	        
+	        Edge nextMove= null;
+	        Node startNode= null;
+	        Node targetNode= null;
+	        
+	        NodeData nextMoveToData= null;
+	        MapTile nextMoveGobalTile = null;
 
 			/**
 			 *  ####  Rover controller process loop  ####
@@ -164,106 +190,118 @@ public class ROVER_07 extends Rover {
 			 *  
 			 */
 			while (true) {                     //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-		
+					
+				
 				// **** Request Rover Location from RCP ****
 				currentLoc = getCurrentLocation();
-				System.out.println(rovername + " currentLoc at start: " + currentLoc);
-				
-				// after getting location set previous equal current to be able
-				// to check for stuckness and blocked later
-				previousLoc = currentLoc;		
-				
-				
+				System.out.println(rovername + " currentLoc at: " + currentLoc);
+				System.out.println(rovername + " targetLocation at: " + targetLocation);			
 
 				// ***** do a SCAN *****
 				// gets the scanMap from the server based on the Rover current location
 				scanMap = doScan(); 
+				
 				// prints the scanMap to the Console output for debug purposes
-				scanMap.debugPrintMap();
-				
-				
+//				scanMap.debugPrintMap();
 				
 				// ***** after doing a SCAN post scan data to the communication server ****
 				// This sends map data to the Communications server which stores it as a global map.
 	            // This allows other rover's to access a history of the terrain this rover has moved over.
+	            String postScanMapTilesResponse = com.postScanMapTiles(currentLoc, scanMap.getScanMap());
+	     
 
-	            System.out.println("do com.postScanMapTiles(currentLoc, scanMapTiles)");
-	            System.out.println("post message: " + com.postScanMapTiles(currentLoc, scanMap.getScanMap()));
-	            System.out.println("done com.postScanMapTiles(currentLoc, scanMapTiles)");
-
+				// ***** get GlobalMap from server *****
+				// gets the GlobalMap from the server to and update its local map for pathing/searching
+	            JSONArray getGlobalMapResponse = com.getGlobalMap();
+	            System.out.println();
+	            
+	            System.out.println("updating globalMap ...");
+	            globalMap = new PlanetMap(getGlobalMapResponse, currentLoc, targetLocation);
+	            
+	            System.out.println("adding scan data to globalMap..");
+	            globalMap.addScanDataMissing(scanMap);
+	            System.out.println();
+	            
+	            // prints the globalMap to the Console output for debug purposes, are marked as ::
+	            // globalMap doesn't tiles of Terrain.NONE from server, it is reserved for unexplored tiles
+	            globalMap.debugPrintMap();
+	              
+	            // testing...
+//	            System.out.println(com.getAllRoverDetails());
+	            
 				
-							
-				// ***** get TIMER time remaining *****
-				timeRemaining = getTimeRemaining();
-				
-	
-				
-				// ***** MOVING *****
-				// try moving east 5 block if blocked
-				if (blocked) {
-					if(stepCount > 0){
-						moveEast();
-						stepCount -= 1;
-					}
-					else {
-						blocked = false;
-						//reverses direction after being blocked and side stepping
-						goingSouth = !goingSouth;
+				// if stopped creates a new path to target and resets the path index
+				if (stopped) {
+					
+					System.out.println("plotting new path: " + globalMap.getStartPosition() + " -> " + globalMap.getTargetPosition());
+					
+					stopped = false;
+					
+					graph = new Graph(globalMap);
+					
+					startNode = graph.getNode(new Node(new NodeData(globalMap.getStartPosition(),
+							globalMap.getTile(globalMap.getStartPosition())))).get();
+					
+					targetNode = graph.getNode(new Node(new NodeData(globalMap.getTargetPosition(),
+							globalMap.getTile(globalMap.getTargetPosition())))).get();
+			
+					path = graph.search(searchStrategy, drivableTerrain, startNode, targetNode);
+					pathIndex = 0;
+				}
+					
+			
+				if (pathIndex < path.size() && !stopped) {
+					
+					nextMove = path.get(pathIndex);
+					nextMoveToData = (NodeData)nextMove.getTo().getData();
+					nextMoveGobalTile = globalMap.getTile(nextMoveToData.getX(), nextMoveToData.getY());
+					nextHasRover = nextMoveGobalTile.getHasRover();
+					nextTerrain = nextMoveGobalTile.getTerrain().getTerString();
+					
+					// checks if next tile is blocked by rover or it was unexplored when search started and is a terrain rover cannot travel on
+					stopped = nextHasRover || !drivableTerrain.contains(nextTerrain);
+					
+					if (!stopped) {
+						// goes until target is reached
+						move(nextMove);
+						
+						
+						
+						pathIndex++;
 					}
 					
-				} else {
-	
-					// pull the MapTile array out of the ScanMap object
-					MapTile[][] scanMapTiles = scanMap.getScanMap();
-					int centerIndex = (scanMap.getEdgeSize() - 1)/2;
-					// tile S = y + 1; N = y - 1; E = x + 1; W = x - 1
-	
-					if (goingSouth) {
-						// check scanMap to see if path is blocked to the south
-						// (scanMap may be old data by now)
-						if (scanMapTiles[centerIndex][centerIndex +1].getHasRover() 
-								|| scanMapTiles[centerIndex][centerIndex +1].getTerrain() == Terrain.ROCK
-								|| scanMapTiles[centerIndex][centerIndex +1].getTerrain() == Terrain.SAND
-								|| scanMapTiles[centerIndex][centerIndex +1].getTerrain() == Terrain.NONE) {
-							blocked = true;
-							stepCount = 5;  //side stepping
-						} else {
-							// request to server to move
-							moveSouth();
-
-						}
-						
-					} else {
-						// check scanMap to see if path is blocked to the north
-						// (scanMap may be old data by now)
-						
-						if (scanMapTiles[centerIndex][centerIndex -1].getHasRover() 
-								|| scanMapTiles[centerIndex][centerIndex -1].getTerrain() == Terrain.ROCK
-								|| scanMapTiles[centerIndex][centerIndex -1].getTerrain() == Terrain.SAND
-								|| scanMapTiles[centerIndex][centerIndex -1].getTerrain() == Terrain.NONE) {
-							blocked = true;
-							stepCount = 5;  //side stepping
-						} else {
-							// request to server to move
-							moveNorth();			
-						}					
+					
+					System.out.println("drivable terrain");
+					for(String s : drivableTerrain) {
+						System.out.print(" " + s);
 					}
+					System.out.println();
+					System.out.println("next terrain: " + nextTerrain);
+					
+					
+					System.out.println("steps remaining: " + (path.size() - pathIndex));
+					System.out.println("next move: " + nextMove);
+					
+					System.out.println("next hasRover: " + nextHasRover);
 				}
-	
-				// another call for current location
-				currentLoc = getCurrentLocation();
-
-	
-				// test for stuckness
-				stuck = currentLoc.equals(previousLoc);	
 				
+				if (pathIndex == path.size() - 1) {
+					System.out.println("reached target need new action...");
+					targetLocation =  new Coord(globalMap.getWidth() - 1, globalMap.getHeight() - 1);
+					System.out.println("trying to find bottom corner...");
+					stopped = true;
+				}
+				System.out.println();
+							
 				// this is the Rovers HeartBeat, it regulates how fast the Rover cycles through the control loop
+				// ***** get TIMER time remaining *****
+				timeRemaining = getTimeRemaining();
+				sleepTime = timeRemaining + 350; // incorrect sleepTimer will break rover
+				System.out.println("ROVER_07 ------------ end process control loop --------------");
+				System.out.println();
 				Thread.sleep(sleepTime);
-				
-				System.out.println("ROVER_07 ------------ end process control loop --------------"); 
 			}  // ***** END of Rover control While(true) loop *****
-		
-			
+					
 			
 		// This catch block hopefully closes the open socket connection to the server
 		} catch (Exception e) {
@@ -286,6 +324,19 @@ public class ROVER_07 extends Rover {
 
 	
 	// add new methods and functions here
+	
+	public void move(Edge edge) {
+
+		NodeData current = (NodeData)edge.getFrom().getData();
+		NodeData next = (NodeData)edge.getTo().getData();
+		
+		if (current.getX() < next.getX()) moveEast();
+		if (current.getX() > next.getX()) moveWest();
+		if (current.getY() < next.getY()) moveSouth();
+		if (current.getY() > next.getY()) moveNorth();
+	}
+	
+	
 
 
 }

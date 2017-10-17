@@ -5,7 +5,10 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
@@ -15,6 +18,7 @@ import com.google.gson.reflect.TypeToken;
 
 import MapSupport.Coord;
 import MapSupport.MapTile;
+import MapSupport.PlanetMap;
 import MapSupport.ScanMap;
 import communicationInterface.Communication;
 import communicationInterface.RoverDetail;
@@ -33,16 +37,20 @@ public class Rover {
 	protected PrintWriter sendTo_RCP;
 
 	public String rovername;
+	
 	public ScanMap scanMap;
+	public PlanetMap globalMap;
+	
 	public int sleepTime;
 	public String SERVER_ADDRESS = "localhost"; //default value
-	public String timeRemaining;
-	public Coord currentLoc = null;
-	public Coord previousLoc = null;
-	public Coord startLocation = null;
-	public Coord targetLocation = null;
-
-	public ArrayList<String> equipment = new ArrayList<String>();
+	public int timeRemaining;
+	public Coord currentLoc;
+	public Coord previousLoc;
+	public Coord startLocation;
+	public Coord targetLocation;
+	public ArrayList<String> equipment;
+	
+	public Set<String> drivableTerrain; // the terrain rover can drive on
 
 	// Hardcoded port number for the CS-5337 class
 	protected static final int PORT_ADDRESS = 9537;
@@ -113,7 +121,7 @@ public class Rover {
 		}
 	}
 
-	protected String getTimeRemaining() throws IOException {
+	protected int getTimeRemaining() throws IOException {
 		String line;
 		String timeRemaining = null;
 		sendTo_RCP.println("TIMER");
@@ -126,7 +134,7 @@ public class Rover {
 			timeRemaining = line.substring(6);
 			System.out.println(rovername + " timeRemaining: " + timeRemaining);
 		}
-		return timeRemaining;
+		return Integer.parseInt(timeRemaining);
 	}
 
 	// method to retrieve a list of this particular rover's EQUIPMENT from the server
@@ -163,6 +171,28 @@ public class Rover {
 				new TypeToken<ArrayList<String>>() {
 				}.getType());
 		return returnList;
+	}
+	
+	// sets terrain rover can drive on used in SearchStrategy class
+	public void setDrivableTerrain(RoverDriveType drive) {
+		
+		drivableTerrain = new HashSet<String>();
+		
+		// all types can traverse these
+		drivableTerrain.add(Terrain.NONE.getTerString()); 
+		drivableTerrain.add(Terrain.SOIL.getTerString());
+		drivableTerrain.add(Terrain.GRAVEL.getTerString());
+		
+		switch (drive) {
+		case WALKER:
+			drivableTerrain.add(Terrain.ROCK.getTerString());
+			break;
+		case TREADS:
+			drivableTerrain.add(Terrain.SAND.getTerString());
+			break;
+		default:
+			break;
+		}
 	}
 
 	// sends a SCAN request to the server and puts the result in the scanMap
@@ -213,6 +243,9 @@ public class Rover {
 		}
 		return null;
 	}
+	
+	
+	
 
 	
 	
