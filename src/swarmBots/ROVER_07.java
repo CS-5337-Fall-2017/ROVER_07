@@ -325,10 +325,20 @@ public class ROVER_07 extends Rover {
 	    				
 	    				// this is the Rovers HeartBeat, it regulates how fast the Rover cycles through the state machine
 	    				// sleep until move cooldown is over
-	    				
 	            		Thread.sleep(moveCooldownRemaining());
-	    				System.out.println("Move Cooldown finished entering state MOVING...");
-	            		roverState = State.MOVING;
+	            		System.out.println("Move Cooldown finished...");
+	            		
+	            		if (tilesRoverCanGather.size() > 0 && roverMode.equals(Mode.REGATHER)) {
+	            			System.out.println("new target to gather found changing mode to SEARCH...");
+							System.out.println("entering state UPDATING_PATH...");
+							roverMode = Mode.SEARCH;
+							roverState = State.UPDATING_PATH;
+	            		}
+	            		else {
+	            			System.out.println("entering state MOVING...");
+		            		roverState = State.MOVING;
+	            		}
+	    				
 	    				
 	            		break;
 	            		
